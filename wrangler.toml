@@ -1,0 +1,15 @@
+name = "anasta-server"
+main = "worker.mjs"
+compatibility_date = "2024-09-23"
+
+# Durable Object for the shared presence room
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+# Free tier: no card required for Workers + Durable Objects (small quota)
+# Deploy: wrangler deploy  (needs CF_API_TOKEN)
