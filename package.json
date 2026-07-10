@@ -1,7 +1,7 @@
 {
   "name": "anasta-server",
   "version": "1.0.0",
-  "description": "Realtime presence server for Anasta Chronicle (Colyseus)",
+  "description": "Realtime presence relay for Anasta Chronicle (plain ws JSON)",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -11,12 +11,8 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@colyseus/core": "^0.15.0",
-    "@colyseus/schema": "^2.0.0",
-    "@colyseus/ws-transport": "^0.15.0",
-    "colyseus": "^0.15.0",
-    "colyseus.js": "^0.15.26",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
   }
 }
