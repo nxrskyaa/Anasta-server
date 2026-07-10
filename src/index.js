@@ -86,6 +86,12 @@ wss.on("connection", (ws) => {
   });
 });
 
+// Server-side heartbeat: keep the Railway TLS proxy from dropping idle browser
+// sockets by sending a tiny tick to every client every 2s (two-way traffic).
+setInterval(() => {
+  broadcast({ t: "tick", ts: Date.now() });
+}, 2000);
+
 httpServer.listen(PORT, () => {
   console.log(`Anasta server listening on :${PORT}`);
 });

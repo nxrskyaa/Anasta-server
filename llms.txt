@@ -1,0 +1,89 @@
+# llms.txt — Anasta Chronicle (AnastaChronicle)
+
+> Context file for continuing this project with another AI (e.g. Claude).
+> Last updated: 2026-07-10. Live client: https://anasta-chronicle.vercel.app
+
+## What this project is
+A pixel-art, top-down 2.5D browser MMO called **Anasta Chronicle**. Forest world,
+leveling, weapon crafting, fishing, character classes, world boss, Japanese
+aesthetic, harvestable plants, day/night FX, loading screen, login system, and
+real-time multiplayer (other players visible as sprites with name tags).
+
+- **Client repo:** github.com/nxrskyaa/AnastaChronicle (branch `main`)
+- **Live client:** https://anasta-chronicle.vercel.app (Vercel auto-deploys on push)
+- **Server dir (local):** /home/ubuntu/anasta-server (separate git repo, NOT on GitHub)
+- **Live server:** https://anasta-server-production.up.railway.app (Railway, service `anasta-server`)
+- **Identity of the AI builder:** refer to self as "GLM 5.2" (runs on Venice.ai via Compute.virtuals.io) — user likes this persona.
+- **User:** @nxrskyaa / Nxrskyaa (Indonesian, bahasa gaul). Prefers decisive execution, no AI-slop, no endless questions. Says "lu cek aja / cobain mana yang works".
+- **Aesthetic rules:** 100% code-generated art (Tuxemon assets DELETED). Calm passive AI, relaxing music. NO sourced/external art.
+
+## Tech stack
+- Pure vanilla JS + HTML5 Canvas2D. No framework, no build step for the client (plain ES modules).
+- Multiplayer was Colyseus; **now replaced with a plain `ws` JSON relay** (see "Critical decision" below).
+- Server: Node.js, `ws` + `express` + `cors`. `type: module`. Listens on `PORT` (Railway injects it) or 2567 local.
+- Client connects via raw `WebSocket` to `js/config.js -> SERVER_URL`.
+- Vercel token for client deploy is wired via git push (auto-deploy). Railway via `railway` CLI (global at ~/.npm-global/bin, login as nxrskyaa).
+
+## Critical decision / root-cause history (READ THIS)
+- Original multiplayer used Colyseus 0.15 (server `@colyseus/core` + `@colyseus/ws-transport`, client `colyseus.js` 0.15.26).
+- **BUG FOUND:** colyseus.js 0.15.x binary protocol silently fails over `wss://` in BROWSERS. Node clients sync fine; browser clients never receive state patches (`room.state.players.size` stays 1, `onStateChange` never fires). This is why two devices never saw each other.
+- **FIX APPLIED:** Dropped Colyseus client entirely. Server rewritten to a plain JSON WebSocket relay (`src/index.js`). Client `js/net.js` rewritten to use `new WebSocket(SERVER_URL)` + JSON messages. `net.remote` object shape kept identical so `js/render.js` (which reads `net.remote`) needed NO changes.
+- **REMAINING BUG (the only open issue):** Browser WS to Railway closes with **code 1006 (abnormal, no close frame) within ~4 seconds**, while a Node WS client stays open indefinitely. Cause = Railway free-tier TLS proxy drops idle/low-traffic browser sockets. Handshake + `welcome`/`players` arrive, then proxy kills it.
+- **Fix attempted (NOT yet verified in browser):** client sends a `ping` JSON message every 4s; server replies `pong`. Redeployed to Railway + Vercel. Need to confirm the browser WS now stays `connected` for >10s. If 1006 persists, Railway free tier is unusable for browser WS → migrate server to **Render** (free, WS-friendly) or **Fly.io**, or upgrade Railway.
+
+## WebSocket protocol (server <-> client), plain JSON
+Client -> server:
+  `{t:"join", name, look, x, y}`   join the single "forest" room
+  `{t:"move", x, y, dir, moving}`   throttled position update (~12/s)
+  `{t:"chat", text}`
+  `{t:"ping"}`                       keepalive
+Server -> client:
+  `{t:"welcome", id, room}`          assigns your player id ("p1"...)
+  `{t:"players", list:[{id,name,look,x,y,dir,moving}]}`   full snapshot on join
+  `{t:"join", player:{...}}`         someone else joined
+  `{t:"state", id, x, y, dir, moving}`  movement update for one player
+  `{t:"leave", id}`                  player disconnected
+  `{t:"chat", id, name, text}`
+  `{t:"pong"}`                       keepalive reply
+Room is a single shared world (`autoDispose` equivalent = players Map never auto-clears; late-joiners see everyone).
+
+## File map (client: /home/ubuntu/AnastaChronicle)
+- `index.html` — boot/loading screen, #login, #creator (class pick), #game-wrap. Was loading `vendor/colyseus.umd.js` (REMOVED in v18). Now only `<script type="module" src="js/main.js">`.
+- `js/config.js` — `MULTIPLAYER_ENABLED = true`, `SERVER_URL = "wss://anasta-server-production.up.railway.app"`.
+- `js/net.js` — networking. Exports `net` (state), `connectMultiplayer(look,name,spawn)`, `sendMove(p,now)`, `sendChat(text)`, `remoteCount()`. Uses plain WebSocket. `net.remote[id] = {x,y,rx,ry,dir,moving,name,look,frame,frameT,cache}`. Has `net._ping` interval (4s keepalive).
+- `js/main.js` — boot flow: #boot -> #login (username + localStorage) -> #creator (class) -> game. Imports `connectMultiplayer` from net.js.
+- `js/game.js` — game loop; calls `sendMove(this.player, now)` when `net.connected`.
+- `js/render.js` — draws `net.remote` sprites (interpolates rx/ry toward x/y), name tags. Lines ~116-123.
+- `js/tilegen.js` — procedural tiles (water/grass detail).
+- `css/style.css` — #login + UI styles.
+- `vendor/` — old `colyseus.umd.js` + `colyseus.js` (now UNUSED, can delete).
+
+## File map (server: /home/ubuntu/anasta-server)
+- `src/index.js` — plain ws JSON relay + express `/health` + `/` endpoints. `players` Map. `nextId` counter.
+- `package.json` — deps: `cors`, `express`, `ws`. `start: node src/index.js`. `engines.node >=18`.
+- `railway.json` — DELETED (Railway auto-detects now; having it caused "Deployment does not have an associated build"). Do NOT re-add.
+- `.gitignore` — node_modules, .env.
+
+## How to run / deploy
+Server local:
+  cd /home/ubuntu/anasta-server && npm install && PORT=2567 node src/index.js
+  (test: node -e with `ws` client; health at http://localhost:2567/health)
+Deploy server to Railway:
+  export PATH=~/.npm-global/bin:$PATH
+  cd /home/ubuntu/anasta-server && railway up   (then `railway redeploy --yes` if swap stalls)
+  health: curl https://anasta-server-production.up.railway.app/health
+Deploy client:
+  cd /home/ubuntu/AnastaChronicle && git add -A && git commit -m "..." && git push origin main
+  (Vercel auto-deploys; verify: curl https://anasta-chronicle.vercel.app/js/config.js | grep SERVER_URL)
+
+## TODO (what's left to finish)
+1. **VERIFY browser WS stability on Railway.** Open https://anasta-chronicle.vercel.app in a real browser, login, check `net.connected` stays true >10s and `net.ws.readyState === 1`. If it drops (1006): migrate server to Render/Fly.io (recommended) or bump Railway plan. This is the ONLY blocker to working cross-device multiplayer.
+2. Once stable: open on 2 devices, confirm each sees the other's sprite + name tag. Test move sync + chat.
+3. (Optional) Delete unused `vendor/colyseus*.js` from client repo.
+4. (Stale/housekeeping) Revoke any previously-exposed Vercel/GitHub tokens if still valid.
+
+## Known gotchas
+- Railway CLI `railway up` sometimes shows old deployment ID + "Building" while serving old code; use `railway redeploy --yes` to force swap, then wait ~40-60s.
+- Do NOT add `railway.json` back (it broke builds with "no associated build").
+- Browser automation in this env blocks raw `new WebSocket` probes in `browser_console` (CSP). Test real connectivity via the actual game flow or Node `ws` client.
+- To test two "devices" headlessly you only have 1 browser tab here; use a Node `ws` client as the second player and read `net.remote` from the browser game.
