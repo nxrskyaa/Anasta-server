@@ -11,8 +11,9 @@ real-time multiplayer (other players visible as sprites with name tags).
 
 - **Client repo:** github.com/nxrskyaa/AnastaChronicle (branch `main`)
 - **Live client:** https://anasta-chronicle.vercel.app (Vercel auto-deploys on push)
-- **Server dir (local):** /home/ubuntu/anasta-server (separate git repo, NOT on GitHub)
-- **Live server:** https://anasta-server-production.up.railway.app (Railway, service `anasta-server`)
+- **Live server:** https://anasta-server.anasta-nxrskyaa.workers.dev (Cloudflare Workers + Durable Object, FREE no-card)
+- **Server repo:** github.com/nxrskyaa/Anasta-server (git, SSH push works; has Node version + Deno version + Cloudflare Worker)
+- **Old/broken server:** Railway (anasta-server-production.up.railway.app) — DON'T USE, free-tier TLS proxy drops browser WS within 4s.
 - **Identity of the AI builder:** refer to self as "GLM 5.2" (runs on Venice.ai via Compute.virtuals.io) — user likes this persona.
 - **User:** @nxrskyaa / Nxrskyaa (Indonesian, bahasa gaul). Prefers decisive execution, no AI-slop, no endless questions. Says "lu cek aja / cobain mana yang works".
 - **Aesthetic rules:** 100% code-generated art (Tuxemon assets DELETED). Calm passive AI, relaxing music. NO sourced/external art.
@@ -64,23 +65,40 @@ Room is a single shared world (`autoDispose` equivalent = players Map never auto
 - `railway.json` — DELETED (Railway auto-detects now; having it caused "Deployment does not have an associated build"). Do NOT re-add.
 - `.gitignore` — node_modules, .env.
 
+## SOLUTION (FINAL — WORKS)
+- Multiplayer runs on **Cloudflare Workers + Durable Object** (FREE, no credit card).
+- `worker.mjs` = Cloudflare Worker with `Room` Durable Object (JSON WS relay).
+- `wrangler.toml` = deploy config (Durable Object binding `ROOM`, migration `new_sqlite_classes`).
+- Deploy: `export CLOUDFLARE_API_TOKEN=...; export CLOUDFLARE_ACCOUNT_ID=...; wrangler deploy`
+- Live: `wss://anasta-server.anasta-nxrskyaa.workers.dev`
+- **Verified in real browser: WS stays OPEN 18s+ (Railway dropped in 4s), remote players detected (remoteCount=2).**
+- Cloudflare has proper WS proxy — browser WS does NOT get dropped. This is the fix.
+
+## Attempted (failed) alternatives
+- **Railway:** free-tier TLS proxy drops browser WS within ~4s (code 1006). Node WS works, browser doesn't. Keepalive/heartbeat didn't help. DON'T USE.
+- **Colyseus 0.15:** binary protocol silently fails over wss:// in browsers. Replaced with plain WS JSON.
+- **Deno Deploy / Fly / Render / Glitch:** Deno needed token (user had none), Fly/Render need card, Glitch is dead. Cloudflare was the no-card winner.
+
 ## How to run / deploy
-Server local:
-  cd /home/ubuntu/anasta-server && npm install && PORT=2567 node src/index.js
-  (test: node -e with `ws` client; health at http://localhost:2567/health)
-Deploy server to Railway:
+Server (Cloudflare, PRODUCTION):
+  cd /home/ubuntu/anasta-server
+  export CLOUDFLARE_API_TOKEN="..."; export CLOUDFLARE_ACCOUNT_ID="7b28d7ae285c5d354dd6f1579f756159"
   export PATH=~/.npm-global/bin:$PATH
-  cd /home/ubuntu/anasta-server && railway up   (then `railway redeploy --yes` if swap stalls)
-  health: curl https://anasta-server-production.up.railway.app/health
+  wrangler deploy
+  (health: curl https://anasta-server.anasta-nxrskyaa.workers.dev/health)
+Server (local Node, for testing):
+  cd /home/ubuntu/anasta-server && npm install && PORT=2567 node src/index.js
+Server (local Deno, alt):
+  deno run --allow-net --allow-env deno_server.ts
 Deploy client:
   cd /home/ubuntu/AnastaChronicle && git add -A && git commit -m "..." && git push origin main
-  (Vercel auto-deploys; verify: curl https://anasta-chronicle.vercel.app/js/config.js | grep SERVER_URL)
+  (Vercel auto-deploys; config SERVER_URL points to Cloudflare workers.dev)
 
 ## TODO (what's left to finish)
-1. **VERIFY browser WS stability on Railway.** Open https://anasta-chronicle.vercel.app in a real browser, login, check `net.connected` stays true >10s and `net.ws.readyState === 1`. If it drops (1006): migrate server to Render/Fly.io (recommended) or bump Railway plan. This is the ONLY blocker to working cross-device multiplayer.
-2. Once stable: open on 2 devices, confirm each sees the other's sprite + name tag. Test move sync + chat.
-3. (Optional) Delete unused `vendor/colyseus*.js` from client repo.
-4. (Stale/housekeeping) Revoke any previously-exposed Vercel/GitHub tokens if still valid.
+1. ✅ DONE: Browser WS stable on Cloudflare (verified connected 18s+, remoteCount=2).
+2. (Optional) Test on 2 real devices: open https://anasta-chronicle.vercel.app on phone + laptop, confirm each sees the other's sprite + name tag, movement sync, chat.
+3. (Optional) Delete unused vendor/colyseus*.js from client repo.
+4. (Optional) Remove dead Railway code (src/index.js Node version still works but Cloudflare is production).
 
 ## Known gotchas
 - Railway CLI `railway up` sometimes shows old deployment ID + "Building" while serving old code; use `railway redeploy --yes` to force swap, then wait ~40-60s.
