@@ -66,6 +66,9 @@ wss.on("connection", (ws) => {
       p.x = m.x; p.y = m.y; p.dir = m.dir; p.moving = !!m.moving;
       broadcast({ t: "state", id: myId, x: Math.round(p.x), y: Math.round(p.y), dir: p.dir, moving: p.moving }, myId);
     }
+    if (m.t === "ping") {
+      send(ws, { t: "pong" });
+    }
     else if (m.t === "chat" && myId) {
       const p = players.get(myId);
       if (!p) return;
