@@ -5,10 +5,13 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "npx wrangler dev",
+    "start:legacy": "node src/index.js",
+    "deploy": "npx wrangler deploy",
+    "test:protocol": "node test-protocol.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "cors": "^2.8.5",

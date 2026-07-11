@@ -1,7 +1,15 @@
 # llms.txt — Anasta Chronicle (AnastaChronicle)
 
 > Context file for continuing this project with another AI (e.g. Claude).
-> Last updated: 2026-07-10. Live client: https://anasta-chronicle.vercel.app
+> Last updated: 2026-07-11. Live client: https://anasta-chronicle.vercel.app
+
+## 2026-07-11 CURRENT STATE (overrides older TODO/history below)
+- Production multiplayer source of truth is `worker.mjs`, protocol v2 on Cloudflare Durable Objects. `src/index.js` and `deno_server.ts` are legacy presence relays only.
+- Realm chat is sanitized/rate-limited. Client reconnect uses exponential backoff plus a 60-second server resume token for position and boss contribution.
+- Duel PvP is mutual opt-in. Server validates consent, bounded movement, range, per-kind damage caps and cadence before broadcasting accepted damage.
+- Infernyx has one shared HP pool, server-selected synchronized attack targets, minimum-contribution equal rewards, arena-presence eligibility and three-minute respawn.
+- `npm start` runs `wrangler dev`; `npm run deploy` deploys the Worker; `npm run test:protocol` is the protocol simulation.
+- Live endpoint remains `wss://anasta-server.anasta-nxrskyaa.workers.dev`.
 
 ## What this project is
 A pixel-art, top-down 2.5D browser MMO called **Anasta Chronicle**. Forest world,
