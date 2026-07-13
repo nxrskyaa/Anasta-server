@@ -20,10 +20,13 @@ export const BOSS_ATTACK_RANGE = 760;
 export const SPAWN_X = 55 * 24;
 export const SPAWN_Y = 55 * 24 + 46;
 export const JOIN_SPAWN_RADIUS = 180;
+export const MAX_PLAYERS = 300;
 export const MOVE_SPEED_PER_MS = .6;
 export const MOVE_PACKET_SLACK = 24;
 
 const DIRECTIONS = new Set(["up", "down", "left", "right"]);
+const SERVER_IDS = new Set(["verdant-01", "azure-02", "umbral-03"]);
+const normalizeServerId = (value) => SERVER_IDS.has(value) ? value : "verdant-01";
 const COMBAT_KINDS = new Set(["basic", "skill", "projectile"]);
 const PVP_KIND_MAX = Object.freeze({ basic: 72, projectile: 92, skill: PVP_MAX_DAMAGE });
 const BOSS_REWARD = Object.freeze({
@@ -75,6 +78,7 @@ export class Room {
     this.resumePositions = new Map();
     this.boss = null;
     this.bossSequence = 0;
+    this.serverId = "verdant-01";
   }
 
   publicPlayer(meta) {
@@ -323,7 +327,7 @@ export class Room {
       }
       meta.lastMoveAt = now;
       if (DIRECTIONS.has(message.dir)) meta.dir = message.dir;
-      safeSend(socket, { t: "welcome", id, room: "forest", protocol: PROTOCOL_VERSION, resumeToken: meta.resumeToken, x: Math.round(meta.x), y: Math.round(meta.y), resumed });
+      safeSend(socket, { t: "welcome", id, room: this.serverId, protocol: PROTOCOL_VERSION, resumeToken: meta.resumeToken, x: Math.round(meta.x), y: Math.round(meta.y), resumed });
       safeSend(socket, { t: "players", list: this.snapshot() });
       if (firstJoin) this.broadcast({ t: "join", player: this.publicPlayer(meta) }, id);
       this.ensureBoss(now);
@@ -397,10 +401,13 @@ export class Room {
 
   async fetch(request) {
     const url = new URL(request.url);
+    this.serverId = normalizeServerId(url.searchParams.get("server"));
     if (url.pathname === "/health") {
       return Response.json({
         ok: true,
         protocol: PROTOCOL_VERSION,
+        server: this.serverId,
+        capacity: MAX_PLAYERS,
         players: this.snapshot().length,
         boss: this.publicBoss(),
       });
@@ -408,6 +415,9 @@ export class Room {
     const upgrade = request.headers.get("Upgrade");
     if (!upgrade || upgrade.toLowerCase() !== "websocket") {
       return new Response("Anasta server — connect via WebSocket", { status: 426 });
+    }
+    if (this.sessions.size >= MAX_PLAYERS) {
+      return new Response("Realm shard is full", { status: 503 });
     }
 
     const pair = new WebSocketPair();
@@ -444,7 +454,8 @@ export class Room {
 
 export default {
   async fetch(request, env) {
-    const id = env.ROOM.idFromName("forest");
+    const serverId = normalizeServerId(new URL(request.url).searchParams.get("server"));
+    const id = env.ROOM.idFromName(serverId);
     return env.ROOM.get(id).fetch(request);
   },
 };
