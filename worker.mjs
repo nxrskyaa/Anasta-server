@@ -434,6 +434,7 @@ export class Room {
         protocol: PROTOCOL_VERSION,
         server: this.serverId,
         capacity: MAX_PLAYERS,
+        stateMode: "durable-boss-v2",
         players: this.snapshot().length,
         boss: this.publicBoss(),
       });
