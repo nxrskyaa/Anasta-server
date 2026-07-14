@@ -79,6 +79,28 @@ export class Room {
     this.boss = null;
     this.bossSequence = 0;
     this.serverId = "verdant-01";
+    const hydrate = async () => {
+      const stored = await this.state.storage?.get?.("realmBossV2");
+      if (!stored || typeof stored !== "object") return;
+      this.boss = stored.boss || null;
+      this.bossSequence = Number(stored.bossSequence) || 0;
+      this.bossParticipants = new Map(Array.isArray(stored.participants) ? stored.participants : []);
+    };
+    this.ready = typeof this.state.blockConcurrencyWhile === "function"
+      ? this.state.blockConcurrencyWhile(hydrate)
+      : Promise.resolve();
+  }
+
+  persistBoss() {
+    if (typeof this.state.storage?.put !== "function") return;
+    const write = this.state.storage.put("realmBossV2", {
+      boss: this.boss,
+      bossSequence: this.bossSequence,
+      participants: [...this.bossParticipants.entries()],
+      savedAt: Date.now(),
+    });
+    if (typeof this.state.waitUntil === "function") this.state.waitUntil(write);
+    else write.catch(() => {});
   }
 
   publicPlayer(meta) {
@@ -150,6 +172,7 @@ export class Room {
     this.bossParticipants.clear();
     this.lastBossHitAt.clear();
     this.broadcast({ t: "boss_spawn", boss: this.publicBoss(), serverNow: now });
+    this.persistBoss();
     return true;
   }
 
@@ -250,6 +273,7 @@ export class Room {
     const applied = Math.min(damage, this.boss.hp);
     this.boss.hp -= applied;
     this.bossParticipants.set(id, (this.bossParticipants.get(id) || 0) + applied);
+    this.persistBoss();
     this.broadcast({
       t: "boss_hit",
       bossId: this.boss.id,
@@ -267,6 +291,7 @@ export class Room {
     this.boss.active = false;
     this.boss.defeatedAt = now;
     this.boss.respawnAt = now + BOSS_RESPAWN_MS;
+    this.persistBoss();
     const eligibleIds = [];
     for (const meta of this.meta.values()) {
       if (!meta.joined) continue;
@@ -400,6 +425,7 @@ export class Room {
   }
 
   async fetch(request) {
+    await this.ready;
     const url = new URL(request.url);
     this.serverId = normalizeServerId(url.searchParams.get("server"));
     if (url.pathname === "/health") {
