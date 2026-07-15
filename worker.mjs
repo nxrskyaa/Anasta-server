@@ -7,9 +7,9 @@ export const WORLD_SIZE = 110 * 24;
 export const PVP_MAX_RANGE = 420;
 export const PVP_MAX_DAMAGE = 120;
 export const PVP_HIT_COOLDOWN = 240;
-export const BOSS_X = 87 * 24;
-export const BOSS_Y = 82 * 24;
-export const BOSS_MAX_HP = 2400;
+export const BOSS_X = 55 * 24;
+export const BOSS_Y = 49 * 24;
+export const BOSS_MAX_HP = 7200;
 export const BOSS_HIT_RANGE = 720;
 export const BOSS_MAX_DAMAGE = 180;
 export const BOSS_HIT_COOLDOWN = 100;
@@ -27,6 +27,14 @@ export const MOVE_PACKET_SLACK = 24;
 const DIRECTIONS = new Set(["up", "down", "left", "right"]);
 const SERVER_IDS = new Set(["verdant-01", "azure-02", "umbral-03"]);
 const normalizeServerId = (value) => SERVER_IDS.has(value) ? value : "verdant-01";
+export const WORLD_IDS = Object.freeze(["overworld", "duel-arena", "raid-sanctum"]);
+const WORLD_ID_SET = new Set(WORLD_IDS);
+const normalizeWorldId = (value) => WORLD_ID_SET.has(value) ? value : "overworld";
+export const WORLD_CONFIG = Object.freeze({
+  overworld: Object.freeze({ name: "Verdant Overworld", pvp: false, boss: false, spawnX: SPAWN_X, spawnY: SPAWN_Y, spawnRadius: JOIN_SPAWN_RADIUS }),
+  "duel-arena": Object.freeze({ name: "Crimson Duel Court", pvp: true, boss: false, spawnX: 55 * 24, spawnY: 61 * 24, spawnRadius: 150 }),
+  "raid-sanctum": Object.freeze({ name: "Infernyx Raid Sanctum", pvp: false, boss: true, spawnX: 55 * 24, spawnY: 65 * 24, spawnRadius: 150, bossX: BOSS_X, bossY: BOSS_Y, bossHp: BOSS_MAX_HP }),
+});
 const COMBAT_KINDS = new Set(["basic", "skill", "projectile"]);
 const PVP_KIND_MAX = Object.freeze({ basic: 72, projectile: 92, skill: PVP_MAX_DAMAGE });
 const BOSS_REWARD = Object.freeze({
@@ -79,6 +87,8 @@ export class Room {
     this.boss = null;
     this.bossSequence = 0;
     this.serverId = "verdant-01";
+    this.worldId = "overworld";
+    this.worldConfig = WORLD_CONFIG.overworld;
     const hydrate = async () => {
       const stored = await this.state.storage?.get?.("realmBossV2");
       if (!stored || typeof stored !== "object") return;
@@ -91,8 +101,19 @@ export class Room {
       : Promise.resolve();
   }
 
+  setWorld(value) {
+    this.worldId = normalizeWorldId(value);
+    this.worldConfig = WORLD_CONFIG[this.worldId];
+    if (!this.worldConfig.boss) {
+      this.boss = null;
+      this.bossParticipants.clear();
+      this.lastBossHitAt.clear();
+    }
+    return this.worldConfig;
+  }
+
   persistBoss() {
-    if (typeof this.state.storage?.put !== "function") return;
+    if (!this.worldConfig.boss || typeof this.state.storage?.put !== "function") return;
     const write = this.state.storage.put("realmBossV2", {
       boss: this.boss,
       bossSequence: this.bossSequence,
@@ -113,6 +134,8 @@ export class Room {
       dir: meta.dir,
       moving: !!meta.moving,
       duel: !!meta.duel,
+      mounted: !!meta.mounted,
+      mountId: meta.mountId || null,
     };
   }
 
@@ -136,7 +159,7 @@ export class Room {
   }
 
   publicBoss() {
-    if (!this.boss) return null;
+    if (!this.worldConfig.boss || !this.boss) return null;
     return {
       id: this.boss.id,
       name: "Infernyx, the Ashen Oni",
@@ -153,16 +176,17 @@ export class Room {
   }
 
   ensureBoss(now = Date.now()) {
+    if (!this.worldConfig.boss) return false;
     if (this.boss?.active) return false;
     if (this.boss?.respawnAt && now < this.boss.respawnAt) return false;
     this.bossSequence += 1;
     this.boss = {
       id: `infernyx-${now.toString(36)}-${this.bossSequence}`,
       active: true,
-      x: BOSS_X,
-      y: BOSS_Y,
-      hp: BOSS_MAX_HP,
-      maxHp: BOSS_MAX_HP,
+      x: this.worldConfig.bossX,
+      y: this.worldConfig.bossY,
+      hp: this.worldConfig.bossHp,
+      maxHp: this.worldConfig.bossHp,
       spawnedAt: now,
       defeatedAt: 0,
       respawnAt: 0,
@@ -206,6 +230,10 @@ export class Room {
   }
 
   handlePvpHit(id, message, now) {
+    if (!this.worldConfig.pvp) {
+      this.rejectPvp(id, "wrong_world", message.target);
+      return;
+    }
     const source = this.meta.get(id);
     const targetId = String(message.target || "");
     const target = this.meta.get(targetId);
@@ -245,6 +273,10 @@ export class Room {
   }
 
   handleBossHit(id, message, now) {
+    if (!this.worldConfig.boss) {
+      this.rejectBoss(id, "wrong_world");
+      return;
+    }
     const player = this.meta.get(id);
     if (!player?.joined || !this.boss?.active) {
       this.rejectBoss(id, "inactive");
@@ -341,22 +373,30 @@ export class Room {
         this.resumePositions.delete(resumeToken);
       } else {
         if (resumeToken) this.resumePositions.delete(resumeToken);
-        const requestedX = finite(message.x) ? clamp(Number(message.x), 0, WORLD_SIZE) : SPAWN_X;
-        const requestedY = finite(message.y) ? clamp(Number(message.y), 0, WORLD_SIZE) : SPAWN_Y;
-        if (Math.hypot(requestedX - SPAWN_X, requestedY - SPAWN_Y) <= JOIN_SPAWN_RADIUS) {
+        const spawnX = this.worldConfig.spawnX, spawnY = this.worldConfig.spawnY;
+        const requestedX = finite(message.x) ? clamp(Number(message.x), 0, WORLD_SIZE) : spawnX;
+        const requestedY = finite(message.y) ? clamp(Number(message.y), 0, WORLD_SIZE) : spawnY;
+        if (Math.hypot(requestedX - spawnX, requestedY - spawnY) <= this.worldConfig.spawnRadius) {
           meta.x = requestedX; meta.y = requestedY;
         } else {
-          meta.x = SPAWN_X; meta.y = SPAWN_Y;
+          meta.x = spawnX; meta.y = spawnY;
         }
         meta.resumeToken ||= crypto.randomUUID();
       }
       meta.lastMoveAt = now;
       if (DIRECTIONS.has(message.dir)) meta.dir = message.dir;
-      safeSend(socket, { t: "welcome", id, room: this.serverId, protocol: PROTOCOL_VERSION, resumeToken: meta.resumeToken, x: Math.round(meta.x), y: Math.round(meta.y), resumed });
+      safeSend(socket, {
+        t: "welcome", id, room: this.serverId, world: this.worldId, worldName: this.worldConfig.name,
+        capabilities: { pvp: this.worldConfig.pvp, boss: this.worldConfig.boss },
+        protocol: PROTOCOL_VERSION, resumeToken: meta.resumeToken,
+        x: Math.round(meta.x), y: Math.round(meta.y), resumed,
+      });
       safeSend(socket, { t: "players", list: this.snapshot() });
       if (firstJoin) this.broadcast({ t: "join", player: this.publicPlayer(meta) }, id);
-      this.ensureBoss(now);
-      safeSend(socket, { t: "boss_state", boss: this.publicBoss(), contribution: this.bossParticipants.get(id) || 0, serverNow: now });
+      if (this.worldConfig.boss) {
+        this.ensureBoss(now);
+        safeSend(socket, { t: "boss_state", boss: this.publicBoss(), contribution: this.bossParticipants.get(id) || 0, serverNow: now });
+      }
       return;
     }
 
@@ -377,6 +417,8 @@ export class Room {
       meta.lastMoveAt = now;
       if (DIRECTIONS.has(message.dir)) meta.dir = message.dir;
       meta.moving = !!message.moving;
+      meta.mounted = !!message.mounted;
+      meta.mountId = meta.mounted && typeof message.mountId === "string" ? message.mountId.slice(0, 40) : null;
       this.broadcast({
         t: "state",
         id,
@@ -384,11 +426,15 @@ export class Room {
         y: Math.round(meta.y),
         dir: meta.dir,
         moving: meta.moving,
+        mounted: meta.mounted,
+        mountId: meta.mountId,
       }, id);
-      this.maybeBossAttack(now);
+      if (this.worldConfig.boss) this.maybeBossAttack(now);
     } else if (message.t === "ping") {
-      this.ensureBoss(now);
-      this.maybeBossAttack(now);
+      if (this.worldConfig.boss) {
+        this.ensureBoss(now);
+        this.maybeBossAttack(now);
+      }
       safeSend(socket, { t: "pong", serverNow: now });
     } else if (message.t === "chat") {
       const text = cleanChat(message.text);
@@ -397,11 +443,12 @@ export class Room {
       this.broadcast({ t: "chat", id, name: meta.name, text, at: now });
     } else if (message.t === "duel") {
       if (typeof message.active !== "boolean") return;
-      meta.duel = message.active;
+      meta.duel = this.worldConfig.pvp && message.active;
       this.broadcast({ t: "duel", id, active: meta.duel, at: now });
     } else if (message.t === "pvp_hit") {
       this.handlePvpHit(id, message, now);
     } else if (message.t === "boss_sync") {
+      if (!this.worldConfig.boss) { this.rejectBoss(id, "wrong_world"); return; }
       this.ensureBoss(now);
       safeSend(socket, { t: "boss_state", boss: this.publicBoss(), contribution: this.bossParticipants.get(id) || 0, serverNow: now });
     } else if (message.t === "boss_hit") {
@@ -428,11 +475,15 @@ export class Room {
     await this.ready;
     const url = new URL(request.url);
     this.serverId = normalizeServerId(url.searchParams.get("server"));
+    this.setWorld(url.searchParams.get("world"));
     if (url.pathname === "/health") {
       return Response.json({
         ok: true,
         protocol: PROTOCOL_VERSION,
         server: this.serverId,
+        world: this.worldId,
+        worldName: this.worldConfig.name,
+        capabilities: { pvp: this.worldConfig.pvp, boss: this.worldConfig.boss },
         capacity: MAX_PLAYERS,
         stateMode: "durable-boss-v2",
         players: this.snapshot().length,
@@ -461,6 +512,8 @@ export class Room {
       dir: "down",
       moving: false,
       duel: false,
+      mounted: false,
+      mountId: null,
       lastChatAt: -Infinity,
       lastMoveAt: Date.now(),
       resumeToken: crypto.randomUUID(),
@@ -481,8 +534,10 @@ export class Room {
 
 export default {
   async fetch(request, env) {
-    const serverId = normalizeServerId(new URL(request.url).searchParams.get("server"));
-    const id = env.ROOM.idFromName(serverId);
+    const url = new URL(request.url);
+    const serverId = normalizeServerId(url.searchParams.get("server"));
+    const worldId = normalizeWorldId(url.searchParams.get("world"));
+    const id = env.ROOM.idFromName(`${serverId}:${worldId}`);
     return env.ROOM.get(id).fetch(request);
   },
 };

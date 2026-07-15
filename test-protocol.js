@@ -36,6 +36,7 @@ function join(room, id, name, x, y, now) {
 }
 
 const room = new Room({}, {});
+room.setWorld("duel-arena");
 const start = 1_700_000_000_000;
 const alice = join(room, "p1", "Alice", BOSS_X + 40, BOSS_Y, start);
 const bob = join(room, "p2", "Bob", BOSS_X + 70, BOSS_Y, start + 1);
@@ -44,7 +45,9 @@ const distant = join(room, "p4", "Distant", 100, 100, start + 3);
 const sockets = [alice, bob, cara, distant];
 
 assert.equal(alice.ofType("welcome")[0].protocol, 2, "join advertises protocol v2");
-assert.equal(alice.ofType("boss_state")[0].boss.active, true, "join receives shared boss state");
+assert.equal(alice.ofType("welcome")[0].world, "duel-arena", "join advertises the isolated world");
+assert.equal(alice.ofType("welcome")[0].capabilities.pvp, true, "duel world advertises PvP capability");
+assert.equal(alice.ofType("boss_state").length, 0, "duel world never leaks raid boss state");
 assert.equal(room.snapshot().length, 4, "presence snapshot keeps all joined players");
 
 for (const socket of sockets) socket.clear();
@@ -90,7 +93,10 @@ room.handleMessage("p1", alice, { t: "pvp_hit", target: "p2", damage: 10 }, star
 assert.equal(alice.ofType("pvp_reject")[0].reason, "mutual_duel_required", "turning duel off immediately restores protection");
 
 for (const socket of sockets) socket.clear();
+room.setWorld("raid-sanctum");
+room.ensureBoss(start + 3900);
 room.boss.hp = 70;
+room.boss.nextAttackAt = start + 3990;
 room.handleMessage("p1", alice, { t: "boss_hit", bossId: room.boss.id, damage: 20 }, start + 4000);
 assert.equal(room.boss.hp, 50, "first boss hit updates the shared HP pool");
 assert.equal(alice.ofType("boss_attack").length, 1, "boss attack target is broadcast by the shared server");
@@ -120,5 +126,17 @@ room.handleMessage("p1", alice, { t: "ping" }, room.boss.respawnAt);
 assert.notEqual(room.boss.id, defeatedBossId, "keepalive wakes the next shared boss after cooldown");
 assert.equal(room.boss.active, true);
 assert.equal(bob.ofType("boss_spawn").length, 1, "respawn is announced without requiring a reconnect");
+
+const overworld = new Room({}, {});
+overworld.setWorld("overworld");
+const safeTraveler = join(overworld, "safe-1", "Safe", 55 * 24, 55 * 24, start);
+const safeTarget = join(overworld, "safe-2", "Target", 55 * 24 + 20, 55 * 24, start + 1);
+overworld.handleMessage("safe-1", safeTraveler, { t: "duel", active: true }, start + 100);
+assert.equal(overworld.meta.get("safe-1").duel, false, "overworld cannot arm PvP");
+overworld.handleMessage("safe-1", safeTraveler, { t: "pvp_hit", target: "safe-2", damage: 10 }, start + 200);
+assert.equal(safeTraveler.ofType("pvp_reject")[0].reason, "wrong_world", "overworld rejects player damage");
+overworld.handleMessage("safe-1", safeTraveler, { t: "boss_hit", damage: 10 }, start + 300);
+assert.equal(safeTraveler.ofType("boss_reject")[0].reason, "wrong_world", "overworld rejects raid damage");
+assert.equal(safeTarget.ofType("pvp_hit").length, 0, "safe target receives no damage event");
 
 console.log("PROTOCOL TEST PASS — presence, chat, duel validation and shared boss rewards");
