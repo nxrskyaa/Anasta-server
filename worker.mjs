@@ -17,6 +17,11 @@ export const BOSS_RESPAWN_MS = 3 * 60 * 1000;
 export const BOSS_REWARD_RADIUS = 640;
 export const BOSS_MIN_CONTRIBUTION = 20;
 export const BOSS_ATTACK_RANGE = 760;
+export const BOSS_AGGRO_RANGE = 620;
+export const BOSS_HOME_RADIUS = 205;
+export const BOSS_MOVE_SPEED_PER_MS = .052;
+export const BOSS_MOVE_INTERVAL_MS = 100;
+export const BOSS_STOP_DISTANCE = 68;
 export const SPAWN_X = 55 * 24;
 export const SPAWN_Y = 55 * 24 + 46;
 export const JOIN_SPAWN_RADIUS = 180;
@@ -192,6 +197,10 @@ export class Room {
       respawnAt: 0,
       nextAttackAt: now + 3600,
       attackSequence: 0,
+      lastMoveAt: now,
+      nextMoveAt: now,
+      homeX: this.worldConfig.bossX,
+      homeY: this.worldConfig.bossY,
     };
     this.bossParticipants.clear();
     this.lastBossHitAt.clear();
@@ -217,6 +226,40 @@ export class Room {
       kind, phase, target: target.id, targetName: target.name,
       targetX: Math.round(target.x), targetY: Math.round(target.y),
       angle: Math.atan2(target.y - this.boss.y, target.x - this.boss.x), at: now,
+    });
+    return true;
+  }
+
+  maybeBossMove(now = Date.now()) {
+    if (!this.boss?.active || now < (this.boss.nextMoveAt || 0)) return false;
+    const elapsed = clamp(now - (this.boss.lastMoveAt || now), 16, 250);
+    this.boss.lastMoveAt = now;
+    this.boss.nextMoveAt = now + BOSS_MOVE_INTERVAL_MS;
+    const home = { x: this.boss.homeX || this.worldConfig.bossX, y: this.boss.homeY || this.worldConfig.bossY };
+    const candidates = [...this.meta.values()]
+      .filter((meta) => meta.joined && distance(meta, home) <= BOSS_AGGRO_RANGE)
+      .sort((a, b) => distance(a, this.boss) - distance(b, this.boss) || a.id.localeCompare(b.id));
+    const target = candidates[0] || home;
+    const dx = target.x - this.boss.x, dy = target.y - this.boss.y;
+    const targetDistance = Math.hypot(dx, dy);
+    const stopDistance = candidates.length ? BOSS_STOP_DISTANCE : 4;
+    if (targetDistance > stopDistance) {
+      const step = Math.min(targetDistance - stopDistance, elapsed * BOSS_MOVE_SPEED_PER_MS);
+      this.boss.x += dx / targetDistance * step;
+      this.boss.y += dy / targetDistance * step;
+      const homeDx = this.boss.x - home.x, homeDy = this.boss.y - home.y;
+      const homeDistance = Math.hypot(homeDx, homeDy);
+      if (homeDistance > BOSS_HOME_RADIUS) {
+        this.boss.x = home.x + homeDx / homeDistance * BOSS_HOME_RADIUS;
+        this.boss.y = home.y + homeDy / homeDistance * BOSS_HOME_RADIUS;
+      }
+    }
+    this.broadcast({
+      t: "boss_move", bossId: this.boss.id,
+      x: Math.round(this.boss.x), y: Math.round(this.boss.y),
+      target: candidates[0]?.id || null,
+      state: candidates.length && targetDistance > BOSS_STOP_DISTANCE ? "chase" : "guard",
+      at: now,
     });
     return true;
   }
@@ -429,10 +472,11 @@ export class Room {
         mounted: meta.mounted,
         mountId: meta.mountId,
       }, id);
-      if (this.worldConfig.boss) this.maybeBossAttack(now);
+      if (this.worldConfig.boss) { this.maybeBossMove(now); this.maybeBossAttack(now); }
     } else if (message.t === "ping") {
       if (this.worldConfig.boss) {
         this.ensureBoss(now);
+        this.maybeBossMove(now);
         this.maybeBossAttack(now);
       }
       safeSend(socket, { t: "pong", serverNow: now });
@@ -450,9 +494,11 @@ export class Room {
     } else if (message.t === "boss_sync") {
       if (!this.worldConfig.boss) { this.rejectBoss(id, "wrong_world"); return; }
       this.ensureBoss(now);
+      this.maybeBossMove(now);
       safeSend(socket, { t: "boss_state", boss: this.publicBoss(), contribution: this.bossParticipants.get(id) || 0, serverNow: now });
     } else if (message.t === "boss_hit") {
       this.ensureBoss(now);
+      this.maybeBossMove(now);
       this.handleBossHit(id, message, now);
     }
   }
